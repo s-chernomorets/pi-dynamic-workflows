@@ -11,34 +11,59 @@
  * concrete "provider/id[:thinking]" spec that overrides the old tier system
  * downstream (agent.ts resolveAgentModelSpec returns options.model first).
  *
- * FAIL-OPEN: a missing/disabled router config, an unimportable resolver, or
- * any error → null → the spawn keeps its original spec, exactly as upstream.
- * Routing failure is never a spawn failure — but it IS logged through the
- * harness logger (harness-log.jsonl + /logs), not just stderr: stderr-only
- * reporting is how a total routing outage once stayed invisible under the TUI.
+ * FAIL-OPEN: a missing bridge, a missing/disabled router config, or any
+ * resolution error → null → the spawn keeps its original spec, exactly as
+ * upstream. Routing failure is never a spawn failure — but it IS logged
+ * through the harness logger (harness-log.jsonl + /logs), not just stderr:
+ * stderr-only reporting is how a total routing outage once stayed invisible
+ * under the TUI.
+ *
+ * NO IMPORT of the harness lib, deliberately — the resolver arrives via a
+ * globalThis bridge set by the harness `workflow-router-bridge` extension
+ * (same process; globals cross jiti's per-extension module instances):
+ *   - a dynamic `import()` of a .ts module that itself has relative .ts
+ *     imports DEADLOCKS jiti when executed from inside a jiti-loaded
+ *     extension in a live Pi session (verified 2026-07-13 by bisection: a
+ *     dep-free stub imports fine; one nested `./config.ts` import hangs the
+ *     workflow forever);
+ *   - a static absolute-path import drags the harness lib into this
+ *     package's tsc program and hard-couples it to an on-disk path.
+ * If the bridge extension isn't loaded (fork used outside the harness, unit
+ * tests), the global is absent → upstream behavior, with a one-time notice.
  */
 
-const HARNESS_LIB = process.env.PI_HARNESS_LIB ?? "/Users/sergey/work/harness/extensions/lib";
-const ROUTING_PATH = `${HARNESS_LIB}/routing.ts`;
-const LOG_PATH = `${HARNESS_LIB}/log.ts`;
+/** Set by the harness workflow-router-bridge extension at session start. */
+interface HarnessRouterBridge {
+  loadRouterConfig: () => any;
+  resolve: (rcfg: any, input: any) => any;
+  writeRoutingRecord: (rcfg: any, record: any) => void;
+  tripwireCheck: (rcfg: any, key: string, now: number) => boolean;
+  promptRef: (prompt: string) => any;
+  getLogger: (name: string) => { error: (m: string) => void; warn: (m: string) => void };
+}
 
 const WRITE_TOOLS = new Set(["write", "edit", "bash", "workflow"]);
 const GRADES = ["light", "research", "coder", "heavy", "max"];
 const TIER_TO_GRADE: Record<string, string> = { small: "light", medium: "research", big: "heavy" };
 
-let routerMod: any;
-let routerModFailed = false;
-let harnessLogger: any;
+let harnessLogger: { error: (m: string) => void; warn: (m: string) => void } | undefined;
+let warnedNoBridge = false;
 
-async function routerLog(level: "error" | "warn", msg: string): Promise<void> {
+function bridge(): HarnessRouterBridge | undefined {
+  return (globalThis as any).__harnessWorkflowRouter;
+}
+
+function routerLog(level: "error" | "warn", msg: string): void {
   try {
-    if (!harnessLogger) {
-      harnessLogger = (await import(LOG_PATH)).getLogger("workflow-router");
+    if (!harnessLogger) harnessLogger = bridge()?.getLogger("workflow-router");
+    if (harnessLogger) {
+      harnessLogger[level](msg);
+      return;
     }
-    harnessLogger[level](msg);
   } catch {
-    console.error(`[workflow-router] ${msg}`);
+    // fall through to stderr
   }
+  console.error(`[workflow-router] ${msg}`);
 }
 
 /**
@@ -66,19 +91,18 @@ export async function resolveWorkflowAgentModel(
   // test garbage into the real routing.jsonl audit log.
   const killSwitch = process.env.PI_HARNESS_ROUTER;
   if (killSwitch === "off" || killSwitch === "0") return null;
-  if (routerModFailed) return null;
-  try {
-    if (!routerMod) {
-      try {
-        routerMod = await import(ROUTING_PATH);
-      } catch (e: any) {
-        routerModFailed = true;
-        await routerLog("error", `resolver unimportable (${e?.message ?? e}); ALL workflow spawns un-routed`);
-        return null;
-      }
+  const b = bridge();
+  if (!b) {
+    if (!warnedNoBridge) {
+      warnedNoBridge = true;
+      console.error(
+        "[workflow-router] harness bridge not found — workflow spawns un-routed (expected only outside the harness setup; check workflow-router-bridge in settings.json packages)",
+      );
     }
-    const { loadRouterConfig, resolve, writeRoutingRecord, tripwireCheck, promptRef } = routerMod;
-    const rcfg = loadRouterConfig();
+    return null;
+  }
+  try {
+    const rcfg = b.loadRouterConfig();
     if (!rcfg || rcfg.enabled === false) return null;
     // Write-capability from the shape's tools (undefined = default full toolset = write-capable, D3).
     const toolNames = agentDef?.tools;
@@ -91,7 +115,7 @@ export async function resolveWorkflowAgentModel(
     if (!asGrade && !raw && !agentOptions?.operation && agentOptions?.tier) {
       asGrade = TIER_TO_GRADE[String(agentOptions.tier).toLowerCase()];
     }
-    const res = resolve(rcfg, {
+    const res = b.resolve(rcfg, {
       // Namespace workflow agentType under wf: so an author naming a type
       // "reviewer" can't inherit chokepoint (a)'s canonical shape floor
       // (harness audit L2). Workflow spawns declare operation explicitly, so
@@ -109,19 +133,16 @@ export async function resolveWorkflowAgentModel(
       // Key on runId (per-run bucket), not a constant — else all workflows
       // share one tripwire counter on the shared globalThis.
       try {
-        tripwireFired = tripwireCheck(rcfg, `wf:${typeof runId === "string" ? runId : "unknown"}`, Date.now());
+        tripwireFired = b.tripwireCheck(rcfg, `wf:${typeof runId === "string" ? runId : "unknown"}`, Date.now());
       } catch {
         // Advisory only.
       }
       if (tripwireFired) {
-        await routerLog(
-          "warn",
-          "tripwire: rapid heavy+ spawns in this run — check the fan-out or declare a bigger opts.size.",
-        );
+        routerLog("warn", "tripwire: rapid heavy+ spawns in this run — check the fan-out or declare a bigger opts.size.");
       }
     }
     try {
-      writeRoutingRecord(rcfg, {
+      b.writeRoutingRecord(rcfg, {
         chokepoint: "workflow-fork",
         traceTag: process.env.PI_TRACE_TAG,
         agentType: agentOptions?.agentType,
@@ -139,18 +160,18 @@ export async function resolveWorkflowAgentModel(
         fallbackOccurred: res.fallbackOccurred,
         tripwireFired,
         // E10 — same shape as chokepoint (a).
-        promptRef: promptRef ? promptRef(prompt) : undefined,
+        promptRef: b.promptRef ? b.promptRef(prompt) : undefined,
       });
     } catch {
       // Accounting never blocks a spawn.
     }
     for (const w of res.warnings ?? []) {
-      await routerLog("warn", String(w));
+      routerLog("warn", String(w));
     }
     if (!res.model) return null; // nothing configured → keep the old spec (fail-open)
     return res.thinking ? `${res.model}:${res.thinking}` : res.model;
   } catch (e: any) {
-    await routerLog("error", `resolve failed (${e?.message ?? e}); spawn un-routed`);
+    routerLog("error", `resolve failed (${e?.message ?? e}); spawn un-routed`);
     return null;
   }
 }
