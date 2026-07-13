@@ -18,6 +18,7 @@ import { Check, Convert } from "typebox/value";
 import { type AgentHistoryEntry, compactAgentHistory } from "./agent-history.js";
 import { applyToolPolicy } from "./agent-registry.js";
 import { classifyProviderLimit, WorkflowError, WorkflowErrorCode } from "./errors.js";
+import { createFilteredResourceLoader } from "./harness-extension-filter.js";
 import { canonicalModelSpec, resolveModelSpecWithThinking } from "./model-spec.js";
 import { loadModelTierConfig, type ModelTierConfig, resolveTierModel } from "./model-tier-config.js";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "./structured-output.js";
@@ -468,21 +469,27 @@ export class WorkflowAgent {
     // group under the project's session dir instead of scattering across
     // temporary worktree paths.
     const sessionManager = this.createSessionManager();
+    // Use real SettingsManager to inherit user's default provider/model settings.
+    // SettingsManager.inMemory() doesn't load ~/.pi/settings.json, so subagents
+    // would fall back to the first available model (e.g. openai-codex) which may
+    // not have valid auth, causing silent empty responses.
+    const settingsManager = SettingsManager.create(this.cwd, agentDir);
+    // HARNESS FORK: filter which extensions load in this child session per the
+    // harness whitelist. Null (filtering off / config missing) keeps the
+    // default loader — identical to upstream behavior.
+    const resourceLoader = await createFilteredResourceLoader(runCwd, agentDir, settingsManager);
     const { session } = await createAgentSession({
       cwd: runCwd,
       agentDir,
       sessionManager,
-      // Use real SettingsManager to inherit user's default provider/model settings.
-      // SettingsManager.inMemory() doesn't load ~/.pi/settings.json, so subagents
-      // would fall back to the first available model (e.g. openai-codex) which may
-      // not have valid auth, causing silent empty responses.
-      settingsManager: SettingsManager.create(this.cwd, agentDir),
+      settingsManager,
       customTools,
       // Per-run modelRegistry wins over the constructor's shared registry
       // (see getRegistry() precedence above).
       ...(options.modelRegistry || this.sharedRegistry
         ? { modelRegistry: options.modelRegistry ?? this.sharedRegistry }
         : {}),
+      ...(resourceLoader ? { resourceLoader } : {}),
       ...this.sessionOptions,
       // Per-call model/thinking wins over any sessionOptions defaults.
       ...(resolvedModel ? { model: resolvedModel } : {}),
