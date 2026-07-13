@@ -138,7 +138,10 @@ export async function resolveWorkflowAgentModel(
         // Advisory only.
       }
       if (tripwireFired) {
-        routerLog("warn", "tripwire: rapid heavy+ spawns in this run — check the fan-out or declare a bigger opts.size.");
+        routerLog(
+          "warn",
+          "tripwire: rapid heavy+ spawns in this run — check the fan-out or declare a bigger opts.size.",
+        );
       }
     }
     try {
