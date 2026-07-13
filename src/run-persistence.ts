@@ -56,6 +56,9 @@ export interface PersistedRunState {
     cost?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    /** HARNESS FORK: cost split — API-billed vs subscription-covered dollars. */
+    apiCost?: number;
+    subCost?: number;
   };
   /** Cached agent results for resume, keyed by deterministic call index. */
   journal?: Array<{ index: number; hash: string; result: unknown }>;

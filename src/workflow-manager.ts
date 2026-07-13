@@ -512,6 +512,8 @@ export class WorkflowManager extends EventEmitter {
               cost: managed.snapshot.tokenUsage.cost,
               cacheRead: managed.snapshot.tokenUsage.cacheRead,
               cacheWrite: managed.snapshot.tokenUsage.cacheWrite,
+              apiCost: managed.snapshot.tokenUsage.apiCost,
+              subCost: managed.snapshot.tokenUsage.subCost,
             }
           : undefined,
         startedAt: managed.startedAt.toISOString(),

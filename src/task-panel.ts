@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { shorten, statusIcon, type WorkflowAgentSnapshot, type WorkflowSnapshot } from "./display.js";
+import { formatCostSplit, shorten, statusIcon, type WorkflowAgentSnapshot, type WorkflowSnapshot } from "./display.js";
 import type { ManagedRun, WorkflowManager } from "./workflow-manager.js";
 import type { WorkflowStorage } from "./workflow-saved.js";
 import type { WorkflowSettings } from "./workflow-settings.js";
@@ -91,10 +91,12 @@ function fitLine(line: string, width?: number): string {
 export function deliverText(run: ManagedRun, opts: { resultPath?: string; maxChars?: number } = {}): string {
   const summary = summarizeResult(run.result?.result, opts.maxChars);
   const tokens = run.result?.tokenUsage ? ` · ${run.result.tokenUsage.total.toLocaleString()} tokens` : "";
+  // HARNESS FORK: surface the run's dollars, split api-billed vs sub-covered.
+  const cost = run.result?.tokenUsage ? formatCostSplit(run.result.tokenUsage) : "";
   const agents = run.result?.agentCount ?? run.snapshot.agentCount;
   const duration = run.result?.durationMs ? ` · ${(run.result.durationMs / 1000).toFixed(1)}s` : "";
   const lines = [
-    `✓ Background workflow "${run.snapshot.name}" finished (${agents} agents${tokens}${duration}).`,
+    `✓ Background workflow "${run.snapshot.name}" finished (${agents} agents${tokens}${cost}${duration}).`,
     "",
     summary,
   ];

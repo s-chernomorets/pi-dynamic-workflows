@@ -4,7 +4,7 @@ import type { Node } from "acorn";
 import { parse } from "acorn";
 import type { TSchema } from "typebox";
 import type { AgentUsage } from "./agent.js";
-import { WorkflowAgent, type WorkflowAgentOptions } from "./agent.js";
+import { SUBSCRIPTION_PROVIDERS, WorkflowAgent, type WorkflowAgentOptions } from "./agent.js";
 import type { AgentHistoryEntry } from "./agent-history.js";
 import {
   type AgentDefinition,
@@ -59,7 +59,17 @@ export interface SharedRuntime {
   limiter: <T>(fn: () => Promise<T>) => Promise<T>;
   agentCount: number;
   spent: number;
-  tokenUsage: { input: number; output: number; total: number; cost: number; cacheRead: number; cacheWrite: number };
+  tokenUsage: {
+    input: number;
+    output: number;
+    total: number;
+    cost: number;
+    cacheRead: number;
+    cacheWrite: number;
+    /** HARNESS FORK: cost split — API-billed vs subscription-covered dollars. */
+    apiCost?: number;
+    subCost?: number;
+  };
   depth: number;
 }
 
@@ -150,6 +160,9 @@ export interface WorkflowRunResult<T = unknown> {
     cost: number;
     cacheRead?: number;
     cacheWrite?: number;
+    /** HARNESS FORK: cost split — API-billed vs subscription-covered dollars. */
+    apiCost?: number;
+    subCost?: number;
   };
 }
 
@@ -317,7 +330,7 @@ export async function runWorkflow<T = unknown>(
     limiter: createLimiter(concurrency),
     agentCount: 0,
     spent: 0,
-    tokenUsage: { input: 0, output: 0, total: 0, cost: 0, cacheRead: 0, cacheWrite: 0 },
+    tokenUsage: { input: 0, output: 0, total: 0, cost: 0, cacheRead: 0, cacheWrite: 0, apiCost: 0, subCost: 0 },
     depth: 0,
   };
   const limiter = shared.limiter;
@@ -509,6 +522,15 @@ export async function runWorkflow<T = unknown>(
           shared.tokenUsage.cost += usage.cost;
           shared.tokenUsage.cacheRead += usage.cacheRead;
           shared.tokenUsage.cacheWrite += usage.cacheWrite;
+          // HARNESS FORK: split the dollars by billing kind. Unknown provider
+          // counts as API — better to overstate real spend than hide it.
+          if (usage.cost) {
+            if (usage.provider && SUBSCRIPTION_PROVIDERS.has(usage.provider)) {
+              shared.tokenUsage.subCost = (shared.tokenUsage.subCost ?? 0) + usage.cost;
+            } else {
+              shared.tokenUsage.apiCost = (shared.tokenUsage.apiCost ?? 0) + usage.cost;
+            }
+          }
         }
         shared.tokenUsage.total += tokens;
         shared.spent += tokens;

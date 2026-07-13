@@ -42,8 +42,33 @@ export interface WorkflowSnapshot {
     cost?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    /** HARNESS FORK: cost split — API-billed vs subscription-covered dollars. */
+    apiCost?: number;
+    subCost?: number;
   };
   runId?: string;
+}
+
+/** HARNESS FORK: "$0.0231" under a dollar, "$1.23" above. */
+export function formatUsd(v: number): string {
+  return `$${v >= 1 ? v.toFixed(2) : v.toFixed(4)}`;
+}
+
+/**
+ * HARNESS FORK: " · $X (api $A + sub $S)" cost fragment for summary lines.
+ * Splits API-billed dollars from subscription-covered (nominal) dollars when
+ * both are present; single-kind runs get one labeled figure; runs persisted
+ * before the split existed (no apiCost/subCost) show the unlabeled total.
+ * Empty string when there is no cost to report.
+ */
+export function formatCostSplit(u: { cost?: number; apiCost?: number; subCost?: number }): string {
+  const api = u.apiCost ?? 0;
+  const sub = u.subCost ?? 0;
+  if (api > 0 && sub > 0) return ` · ${formatUsd(api + sub)} (api ${formatUsd(api)} + sub ${formatUsd(sub)})`;
+  if (api > 0) return ` · ${formatUsd(api)} api`;
+  if (sub > 0) return ` · ${formatUsd(sub)} sub`;
+  if (u.cost && u.cost > 0) return ` · ${formatUsd(u.cost)}`;
+  return "";
 }
 
 export interface WorkflowDisplay {

@@ -252,7 +252,23 @@ export interface AgentUsage {
   cacheWrite: number;
   total: number;
   cost: number;
+  /**
+   * HARNESS FORK: provider of the model this agent actually ran on (e.g.
+   * "litellm", "openai-codex"). Best-effort — undefined when neither the
+   * resolved model nor the session exposes it. Lets the caller split cost
+   * into API-billed vs subscription-covered dollars.
+   */
+  provider?: string;
 }
+
+/**
+ * HARNESS FORK: providers billed by a subscription (OAuth login), not by
+ * per-token API dollars. Their `cost` numbers are the models' nominal
+ * per-token pricing — what the run WOULD have cost on the API — so the
+ * api/sub split reads as "real dollars" vs "subscription-covered value".
+ * Extend if more OAuth providers come into use.
+ */
+export const SUBSCRIPTION_PROVIDERS = new Set(["openai-codex"]);
 
 export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefined> {
   label?: string;
@@ -571,6 +587,9 @@ export class WorkflowAgent {
             cacheWrite: tokens.cacheWrite,
             total: tokens.total,
             cost,
+            // HARNESS FORK: the provider the agent ran on — the resolved model
+            // when a spec was given, else the session's default model.
+            provider: resolvedModel?.provider ?? (session as any).model?.provider,
           });
         } catch {
           // Usage is best-effort; never let stats failure mask the real result/error.

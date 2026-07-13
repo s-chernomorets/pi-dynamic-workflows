@@ -4,7 +4,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { recomputeWorkflowSnapshot, renderWorkflowText, type WorkflowSnapshot } from "./display.js";
+import { formatCostSplit, recomputeWorkflowSnapshot, renderWorkflowText, type WorkflowSnapshot } from "./display.js";
 import { type EffortState, effortDirective } from "./effort-command.js";
 import type { PersistedRunState } from "./run-persistence.js";
 import { registerSavedWorkflow } from "./saved-commands.js";
@@ -32,7 +32,8 @@ function summarizeRun(run: PersistedRunState): string {
   const done = run.agents.filter((a) => a.status === "done").length;
   const total = run.agents.length;
   const tokens = run.tokenUsage ? ` · ${run.tokenUsage.total.toLocaleString()} tok` : "";
-  return `${icon} ${run.runId}  ${run.workflowName} [${run.status}] ${done}/${total} agents${tokens}`;
+  const cost = run.tokenUsage ? formatCostSplit(run.tokenUsage) : "";
+  return `${icon} ${run.runId}  ${run.workflowName} [${run.status}] ${done}/${total} agents${tokens}${cost}`;
 }
 
 function oneLineProgress(snapshot: WorkflowSnapshot): string {
@@ -98,6 +99,10 @@ function renderPersistedStatus(run: PersistedRunState): string {
     lines.push(`  ${icon} ${agent.label}`);
   }
   if (run.tokenUsage) lines.push(`  tokens: ${run.tokenUsage.total.toLocaleString()}`);
+  if (run.tokenUsage) {
+    const cost = formatCostSplit(run.tokenUsage).replace(/^ · /, "");
+    if (cost) lines.push(`  cost: ${cost}`);
+  }
   if (run.durationMs) lines.push(`  duration: ${(run.durationMs / 1000).toFixed(1)}s`);
   return lines.join("\n");
 }
