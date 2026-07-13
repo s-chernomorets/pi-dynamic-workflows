@@ -16,7 +16,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { listAvailableModelSpecs } from "./agent.js";
 import { MODEL_TIERS_FILE } from "./config.js";
 
 // ---------------------------------------------------------------------------
@@ -42,99 +41,29 @@ export function getModelTierConfigPath(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Capability hints
-// ---------------------------------------------------------------------------
-
-/**
- * Substrings that identify small/cheap models (case-insensitive).
- * Used by `rankByCapability` to rank models lowest so a mini/flash/haiku model
- * never lands in a higher tier than a model without this hint.
- */
-export const SMALL_MODEL_HINTS = ["mini", "flash", "haiku", "nano", "small"] as const;
-
-/**
- * Substrings that identify large/capable models (case-insensitive).
- * Used by `rankByCapability` to rank models highest so they are preferred for
- * the big tier over models without this hint.
- */
-export const BIG_MODEL_HINTS = ["opus", "pro", "ultra", "large", "plus"] as const;
-
-/**
- * Capability score for a single model spec: +1 if it matches a big-model hint,
- * -1 if it matches a small-model hint, 0 otherwise. If a model happens to
- * match both hint sets (e.g. a name containing both "mini" and "pro"), the
- * small hint wins — we never want a "mini"-labelled model to outrank a
- * neutral or clearly-large one.
- */
-function capabilityScore(model: string): number {
-  const lower = model.toLowerCase();
-  if (SMALL_MODEL_HINTS.some((hint) => lower.includes(hint))) return -1;
-  if (BIG_MODEL_HINTS.some((hint) => lower.includes(hint))) return 1;
-  return 0;
-}
-
-/**
- * Rank `available` models from least to most capable using `capabilityScore`.
- * The sort is stable (ties preserve registry order), so within a score bucket
- * models keep their original relative order.
- */
-function rankByCapability(available: string[]): string[] {
-  return available
-    .map((model, index) => ({ model, index, score: capabilityScore(model) }))
-    .sort((a, b) => a.score - b.score || a.index - b.index)
-    .map((entry) => entry.model);
-}
-
-// ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
 
 /**
- * Build a default tier config. When the available model registry is known,
- * spread it across tiers so small/medium/big routing is meaningful out of the
- * box. When the registry is empty or unavailable, fall back to the current Pi
- * model so fresh installs still get usable tier values.
+ * Build a default tier config: every tier is the current Pi model.
  *
- * Models are first ranked least → most capable via `rankByCapability` (which
- * consults `SMALL_MODEL_HINTS` / `BIG_MODEL_HINTS`, falling back to registry
- * order for models that match neither). Tiers are then assigned from this
- * single ranked pool with exclusion — each model is used for at most one
- * tier — so distinct tiers never collapse onto the same model and a
- * mini/flash/haiku model can never outrank a bigger one (no inversion):
+ * HARNESS FORK: the upstream substring "capability" ranker is REMOVED. It
+ * guessed tier placement from model NAMES (`opus`/`pro`/`ultra`/`large`/`plus`
+ * ranked highest, `mini`/`flash`/`haiku`/`nano`/`small` lowest), which crowned
+ * gemini-2.5-pro as `big` purely for containing "pro" and silently made it the
+ * workflow build model. Tiers must be predefined, never guessed from a name.
  *
- *   - big    = the most capable model (last in the ranking)
- *   - small  = the least capable model (first in the ranking)
- *   - medium = the middle-ranked model
+ * Real tier values live in ~/.pi/workflows/model-tiers.json, deployed from the
+ * harness repo (workflows/model-tiers.json) by `npm run deploy`. This default
+ * only applies when that file is missing (fresh install) or on a
+ * `/workflows-models` reset — and then it pins everything to the session's
+ * current model: predictable, never name-ranked.
  *
- * When fewer than 3 distinct models are available, this degrades gracefully
- * by reusing the *strongest* available model for the higher tier(s) — it
- * never reuses a weaker model for a higher tier than a stronger one:
- *
- *   - 2 models: small = weaker, medium = big = stronger
- *   - 1 model / 0 models: small = medium = big = that model (or the current
- *     model / "" fallback)
- *
- * `_availableModels` is injectable for testing and for callers that already
- * fetched the registry. When omitted, this reads from the live registry
- * regardless of whether `currentModelSpec` was also provided, so the
- * default-argument path always goes through the same corrected logic instead
- * of silently reproducing the original single-tier collapse.
+ * `_availableModels` is kept in the signature for caller compatibility and is
+ * deliberately ignored.
  */
 export function buildDefaultTierConfig(currentModelSpec?: string, _availableModels?: string[]): ModelTierConfig {
-  const available = _availableModels ?? listAvailableModelSpecs();
-  const ranked = rankByCapability(available);
-
-  if (ranked.length >= 3) {
-    const small = ranked[0];
-    const big = ranked[ranked.length - 1];
-    const medium = ranked[Math.floor(ranked.length / 2)];
-    return { tiers: { small, medium, big } };
-  }
-  if (ranked.length === 2) {
-    const [weaker, stronger] = ranked;
-    return { tiers: { small: weaker, medium: stronger, big: stronger } };
-  }
-  const fallback = ranked[0] ?? currentModelSpec ?? "";
+  const fallback = currentModelSpec ?? "";
   return {
     tiers: {
       small: fallback,
