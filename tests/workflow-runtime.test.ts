@@ -854,3 +854,45 @@ return { escaped, arr, j, s }`;
   // where Date.now is neutered -> blocked (the old host-object escape is closed).
   assert.match(r.result.escaped, /blocked/, "constructor escape via vm objects is closed");
 });
+
+test("runWorkflow splits cost into apiCost/subCost by the provider each agent ran on", async () => {
+  const providers = ["litellm", "openai-codex"];
+  let call = 0;
+  const runner = {
+    async run(_prompt: string, options: { onUsage?: (u: AgentUsage) => void }) {
+      const provider = providers[call++];
+      options.onUsage?.({
+        input: 10,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 15,
+        cost: provider === "openai-codex" ? 0.005 : 0.002,
+        provider,
+      });
+      return "ok";
+    },
+  };
+  const result = await runWorkflow(twoAgentScript, { agent: runner, persistLogs: false });
+  assert.ok(Math.abs((result.tokenUsage?.cost ?? 0) - 0.007) < 1e-9);
+  assert.ok(Math.abs((result.tokenUsage?.apiCost ?? 0) - 0.002) < 1e-9, "litellm cost lands in apiCost");
+  assert.ok(Math.abs((result.tokenUsage?.subCost ?? 0) - 0.005) < 1e-9, "openai-codex cost lands in subCost");
+});
+
+test("runWorkflow counts an unknown/undefined provider as apiCost (never understate real spend)", async () => {
+  const result = await runWorkflow(twoAgentScript, {
+    agent: fakeAgent({ input: 1, output: 1, total: 2, cost: 0.003 }), // no provider field
+    persistLogs: false,
+  });
+  assert.ok(Math.abs((result.tokenUsage?.apiCost ?? 0) - 0.006) < 1e-9, "providerless cost is api");
+  assert.equal(result.tokenUsage?.subCost, 0);
+});
+
+test("runWorkflow zero-cost usage leaves both cost buckets at 0", async () => {
+  const result = await runWorkflow(twoAgentScript, {
+    agent: fakeAgent({ input: 1, output: 1, total: 2, cost: 0, provider: "openai-codex" }),
+    persistLogs: false,
+  });
+  assert.equal(result.tokenUsage?.apiCost, 0);
+  assert.equal(result.tokenUsage?.subCost, 0);
+});

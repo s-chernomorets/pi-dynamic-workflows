@@ -142,6 +142,9 @@ export interface WorkflowRunOptions extends WorkflowAgentOptions {
     cost: number;
     cacheRead?: number;
     cacheWrite?: number;
+    /** HARNESS FORK: cost split — API-billed vs subscription-covered dollars. */
+    apiCost?: number;
+    subCost?: number;
   }) => void;
 }
 

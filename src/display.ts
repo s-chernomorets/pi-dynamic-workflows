@@ -205,9 +205,10 @@ export function renderWorkflowLines(
       : snapshot.runningCount > 0
         ? `, ${snapshot.runningCount} running`
         : "";
-  // Build header with token info (and cost when the provider reports it)
+  // Build header with token info (and cost when the provider reports it —
+  // HARNESS FORK: split api-billed vs subscription-covered dollars)
   const usage = snapshot.tokenUsage;
-  const costInfo = usage?.cost ? ` · $${usage.cost.toFixed(4)}` : "";
+  const costInfo = usage ? formatCostSplit(usage) : "";
   const tokenInfo = usage ? ` · ${usage.total.toLocaleString()} tokens${costInfo}` : "";
   const lines = [
     `${theme.bold(`◆ Workflow: ${snapshot.name}`)} (${snapshot.doneCount}/${snapshot.agentCount} done${state}${tokenInfo})`,

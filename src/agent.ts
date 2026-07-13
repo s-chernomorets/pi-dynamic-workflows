@@ -587,9 +587,11 @@ export class WorkflowAgent {
             cacheWrite: tokens.cacheWrite,
             total: tokens.total,
             cost,
-            // HARNESS FORK: the provider the agent ran on — the resolved model
-            // when a spec was given, else the session's default model.
-            provider: resolvedModel?.provider ?? (session as any).model?.provider,
+            // HARNESS FORK: the provider the agent ran on. session.model is
+            // authoritative (it reflects the model the session actually used,
+            // including the unresolved-spec fallback to the session default);
+            // resolvedModel is the backstop if the getter is ever undefined.
+            provider: session.model?.provider ?? resolvedModel?.provider,
           });
         } catch {
           // Usage is best-effort; never let stats failure mask the real result/error.
