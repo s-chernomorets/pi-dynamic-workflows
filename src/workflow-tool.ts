@@ -16,17 +16,17 @@ import { createWorkflowStorage, type WorkflowStorage } from "./workflow-saved.js
 import { loadWorkflowSettings } from "./workflow-settings.js";
 
 /**
- * Model routing guideline for workflow authors.
- * Tells the LLM about opts.tier (small/medium/big) for runtime-enforced
- * model selection, and opts.model for an exact provider/id override.
+ * Model routing guideline for workflow authors (HARNESS FORK: levels-only).
+ * Tells the LLM to declare opts.operation (+ opts.size) on every agent —
+ * with opts.tier as the legacy fallback — and NEVER a concrete model id:
+ * the harness router resolves every spawn's engine, so opts.model is not
+ * honored and the model registry is deliberately not enumerated here.
  *
  * This string is injected into the workflow tool's promptGuidelines and
  * therefore appears in the LLM's system prompt for every workflow execution.
  *
- * `registry` is a live host-session ModelRegistry (or a getter reaching one),
- * e.g. from WorkflowManager.getModelRegistry(). A getter lets each call see
- * the registry as it stands at that moment — the manager's registry is set on
- * session_start, after the tool is created, so an early snapshot would miss it.
+ * The `_registry` parameter is retained for upstream API compatibility and
+ * ignored (upstream used it to list the user's models into the prompt).
  */
 export function modelRoutingGuideline(_registry?: ModelRegistry | (() => ModelRegistry | undefined)): string {
   // HARNESS FORK: workflow scripts speak in LEVELS, never concrete model ids.

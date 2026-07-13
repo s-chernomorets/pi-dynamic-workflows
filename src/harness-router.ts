@@ -48,6 +48,9 @@ const TIER_TO_GRADE: Record<string, string> = { small: "light", medium: "researc
 
 let harnessLogger: { error: (m: string) => void; warn: (m: string) => void } | undefined;
 let warnedNoBridge = false;
+// Warn once per unknown tier value, not once per spawn — a parallel() fan-out
+// with a typo'd tier would otherwise emit one warn line per agent.
+const warnedUnknownTiers = new Set<string>();
 
 function bridge(): HarnessRouterBridge | undefined {
   return (globalThis as any).__harnessWorkflowRouter;
@@ -120,7 +123,10 @@ export async function resolveWorkflowAgentModel(
         // silently replace the documented tier contract (unconfigured tier →
         // session main model) with the router's write/read default grade.
         // Leave the spawn to upstream tier resolution, visibly.
-        routerLog("warn", `unknown tier "${tier}" — spawn left to upstream tier resolution (un-routed)`);
+        if (!warnedUnknownTiers.has(tier)) {
+          warnedUnknownTiers.add(tier);
+          routerLog("warn", `unknown tier "${tier}" — spawns left to upstream tier resolution (un-routed)`);
+        }
         return null;
       }
     }
