@@ -86,6 +86,16 @@ export async function createFilteredResourceLoader(
 ): Promise<DefaultResourceLoader | null> {
   const allow = extensionAllowList();
   if (!allow) return null;
+  // An EMPTY allow-list would filter out every extension — including the model
+  // provider — leaving the child session silently broken. Treat it as a broken
+  // config: fail open like the other degenerate branches.
+  if (allow.length === 0) {
+    if (!warnedBrokenConfig) {
+      warnedBrokenConfig = true;
+      console.warn("[workflow-ext-whitelist] 'allow' is empty; loading all extensions");
+    }
+    return null;
+  }
   const loader = new DefaultResourceLoader({
     // createAgentSession defaults an absent cwd to process.cwd(); mirror that.
     cwd: cwd ?? process.cwd(),

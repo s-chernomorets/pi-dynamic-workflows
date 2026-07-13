@@ -171,6 +171,18 @@ export interface AgentOptions<TSchemaDef extends TSchema | undefined = TSchema |
    * no configured entry it falls back to the session's main model.
    */
   tier?: string;
+  /**
+   * HARNESS FORK: what kind of work this agent does — the primary input to the
+   * harness router (see src/harness-router.ts). "retrieval" = find/list/fetch,
+   * "comprehension" = trace/summarize/map, "inference" = audit/review/judge/
+   * decide. When declared, it takes precedence over `tier` for routing.
+   */
+  operation?: "retrieval" | "comprehension" | "inference";
+  /**
+   * HARNESS FORK: task size ceiling for the harness router ("S" | "M" | "L" |
+   * "XL") — caps how expensive an engine the router may pick.
+   */
+  size?: "S" | "M" | "L" | "XL";
   isolation?: "worktree";
   /**
    * Name of a registered subagent definition (`.pi/agents/<name>.md`, project >

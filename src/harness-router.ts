@@ -89,8 +89,8 @@ export async function resolveWorkflowAgentModel(
   // set PI_HARNESS_ROUTER=off so spawns are never routed against the live
   // harness config — routing here would make tests config-dependent and write
   // test garbage into the real routing.jsonl audit log.
-  const killSwitch = process.env.PI_HARNESS_ROUTER;
-  if (killSwitch === "off" || killSwitch === "0") return null;
+  const killSwitch = process.env.PI_HARNESS_ROUTER?.trim().toLowerCase();
+  if (killSwitch === "off" || killSwitch === "0" || killSwitch === "false") return null;
   const b = bridge();
   if (!b) {
     if (!warnedNoBridge) {
@@ -112,8 +112,17 @@ export async function resolveWorkflowAgentModel(
     // Strip any :thinking suffix before classifying the request.
     const raw = typeof currentSpec === "string" && currentSpec.trim() ? currentSpec.trim().split(":")[0] : undefined;
     let asGrade = raw && GRADES.includes(raw.toLowerCase()) ? raw.toLowerCase() : undefined;
-    if (!asGrade && !raw && !agentOptions?.operation && agentOptions?.tier) {
-      asGrade = TIER_TO_GRADE[String(agentOptions.tier).toLowerCase()];
+    const tier = agentOptions?.tier != null ? String(agentOptions.tier).trim().toLowerCase() : undefined;
+    if (!asGrade && !raw && !agentOptions?.operation && tier) {
+      asGrade = TIER_TO_GRADE[tier];
+      if (!asGrade) {
+        // Unknown tier: do NOT route it as "declared nothing" — that would
+        // silently replace the documented tier contract (unconfigured tier →
+        // session main model) with the router's write/read default grade.
+        // Leave the spawn to upstream tier resolution, visibly.
+        routerLog("warn", `unknown tier "${tier}" — spawn left to upstream tier resolution (un-routed)`);
+        return null;
+      }
     }
     const res = b.resolve(rcfg, {
       // Namespace workflow agentType under wf: so an author naming a type
@@ -149,7 +158,7 @@ export async function resolveWorkflowAgentModel(
         chokepoint: "workflow-fork",
         traceTag: process.env.PI_TRACE_TAG,
         agentType: agentOptions?.agentType,
-        declared: { operation: agentOptions?.operation, size: agentOptions?.size },
+        declared: { operation: agentOptions?.operation, size: agentOptions?.size, tier },
         shape: { writeCapable, toolNames: Array.isArray(toolNames) ? toolNames : undefined },
         flags: { hotPath: res.hotPath },
         requestedGrade: asGrade,
