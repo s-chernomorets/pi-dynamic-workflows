@@ -38,6 +38,8 @@ export function modelRoutingGuideline(registry?: ModelRegistry | (() => ModelReg
   return [
     "For workflow, the user configures per-tier models (/workflows-models), so TAG EVERY agent with opts.tier by role so those models are actually used.",
     "opts.tier accepts 'small', 'medium', or 'big' and is enforced at runtime.",
+    // HARNESS FORK: teach the authoring model the router's levers, or spawns never declare them.
+    "PREFERRED: tag opts.operation ('retrieval' = find/list/fetch, 'comprehension' = trace/summarize/map, 'inference' = audit/review/judge/decide) and opts.size ('S'|'M'|'L'|'XL') — the router picks the engine by task shape and caps cost by size; declare opts.operation on EVERY agent.",
     "Small tier: lightweight exploration/search/inventory agents.",
     "Medium tier: balanced analysis agents.",
     "Big tier: synthesis/judgment/decision agents spanning the full context.",

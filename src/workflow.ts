@@ -15,6 +15,7 @@ import {
 } from "./agent-registry.js";
 import { DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_RETRIES, MAX_AGENTS_PER_RUN, MAX_CONCURRENCY } from "./config.js";
 import { WorkflowError, WorkflowErrorCode, wrapError } from "./errors.js";
+import { resolveWorkflowAgentModel } from "./harness-router.js";
 import { createWorkflowLogger } from "./logger.js";
 import { parseModelRoutingFromMeta, resolveModelForPhase } from "./model-routing.js";
 import { createAgentStoreTools, SharedStore } from "./shared-store.js";
@@ -398,7 +399,12 @@ export async function runWorkflow<T = unknown>(
     // beats tier/phase. When only a tier is set, pass undefined here so the tier (not
     // the phase model) decides inside WorkflowAgent.run().
     const explicitModel = agentOptions.model ?? agentDef?.model;
-    const modelSpec =
+    // HARNESS FORK: `let` — the router reassigns this inside the limiter
+    // closure below. NO routing await here: this line sits in the await-free
+    // span between the maxAgents/budget gate and the synchronous slot
+    // reservation (shared.agentCount++); an await here would let a parallel()
+    // fan-out overshoot the cap.
+    let modelSpec =
       explicitModel ?? (agentOptions.tier ? undefined : resolveModelForPhase(assignedPhase, routingConfig));
     // For display in /workflows: the model this agent runs on — its explicit/phase
     // spec, else the session's main model. The real resolved id overrides this via
@@ -467,6 +473,17 @@ export async function runWorkflow<T = unknown>(
         if (!worktree.isolated) log(`isolation ignored for "${label}" (${worktree.reason})`);
       }
       const runCwd = worktree?.isolated ? worktree.cwd : undefined;
+
+      // HARNESS FORK: route the spawn HERE — inside the limiter closure, AFTER
+      // the slot reservation AND the resume-replay early-return, so resumed /
+      // cache-hit calls never re-route or re-log. The resume hash folds the
+      // UN-routed modelSpec (computed above) — stable across runs; a router
+      // config change intentionally does not bust the resume cache.
+      // onModelResolved corrects displayModel once the child session exists.
+      {
+        const routed = await resolveWorkflowAgentModel(agentOptions, agentDef, modelSpec, prompt, runId);
+        if (routed) modelSpec = routed;
+      }
 
       // Captured from the subagent's real session usage; falls back to an
       // estimate when the provider reports no usage (total === 0). Usage is reset
