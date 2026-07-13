@@ -174,17 +174,19 @@ export interface AgentOptions<TSchemaDef extends TSchema | undefined = TSchema |
   phase?: string;
   schema?: TSchemaDef;
   /**
-   * Run this agent on a specific model (`provider/modelId` or a bare `modelId`).
-   * The workflow author chooses per-agent models per the routing policy in the
-   * tool guidelines (e.g. a lighter model for exploration, the main model for
-   * analysis). When omitted, the session's main model is used.
+   * HARNESS FORK: do NOT use — workflow scripts speak in levels, never
+   * concrete model ids. The harness router resolves every spawn's engine; a
+   * raw `provider/modelId` here is treated as a request the router may (and
+   * for off-grade ids WILL) override. Kept for upstream API compatibility.
+   * Declare `operation` (+ `size`) instead.
    */
   model?: string;
   /**
-   * Coarse model tier ("small" | "medium" | "big"), resolved from the user's
-   * model-tiers config (see /workflows-models). An explicit `model` takes
-   * precedence; a tier takes precedence over the phase model. When the tier has
-   * no configured entry it falls back to the session's main model.
+   * Coarse model tier ("small" | "medium" | "big") — the LEGACY level knob.
+   * The harness router bridges it to a level request (small→light,
+   * medium→research, big→heavy); prefer `operation` + `size`. With routing
+   * off, tiers resolve from the user's model-tiers config
+   * (see /workflows-models), falling back to the session's main model.
    */
   tier?: string;
   /**

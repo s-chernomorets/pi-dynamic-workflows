@@ -1,7 +1,6 @@
 import { defineTool, type ModelRegistry, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { listAvailableModelSpecs } from "./agent.js";
 import { listAgentTypes, loadAgentRegistry } from "./agent-registry.js";
 import {
   createToolUpdateWorkflowDisplay,
@@ -29,24 +28,17 @@ import { loadWorkflowSettings } from "./workflow-settings.js";
  * the registry as it stands at that moment — the manager's registry is set on
  * session_start, after the tool is created, so an early snapshot would miss it.
  */
-export function modelRoutingGuideline(registry?: ModelRegistry | (() => ModelRegistry | undefined)): string {
-  const resolvedRegistry = typeof registry === "function" ? registry() : registry;
-  const available = listAvailableModelSpecs(resolvedRegistry);
-  const list = available.length
-    ? `The user's currently available models (route only to these) are: ${available.join(", ")}.`
-    : "Use models the user has configured.";
+export function modelRoutingGuideline(_registry?: ModelRegistry | (() => ModelRegistry | undefined)): string {
+  // HARNESS FORK: workflow scripts speak in LEVELS, never concrete model ids.
+  // The harness router resolves every spawn to an engine; a raw provider/id in
+  // opts.model is not honored (unmappable ids fall to the router's default
+  // grade), so advertising the model list here only tempts the author into a
+  // lever that does nothing. Levels are the whole interface.
   return [
-    "For workflow, the user configures per-tier models (/workflows-models), so TAG EVERY agent with opts.tier by role so those models are actually used.",
-    "opts.tier accepts 'small', 'medium', or 'big' and is enforced at runtime.",
-    // HARNESS FORK: teach the authoring model the router's levers, or spawns never declare them.
-    "PREFERRED: tag opts.operation ('retrieval' = find/list/fetch, 'comprehension' = trace/summarize/map, 'inference' = audit/review/judge/decide) and opts.size ('S'|'M'|'L'|'XL') — the router picks the engine by task shape and caps cost by size; declare opts.operation on EVERY agent.",
-    "Small tier: lightweight exploration/search/inventory agents.",
-    "Medium tier: balanced analysis agents.",
-    "Big tier: synthesis/judgment/decision agents spanning the full context.",
-    "An agent with no opts.tier and no opts.model falls back to the user's medium tier; do not rely on that — tag agents explicitly so small/big are used where they fit.",
-    "If the user named a specific model, use opts.model with that exact provider/id; opts.model always takes precedence over opts.tier.",
-    "Exact model specs may include Pi CLI-style thinking suffixes such as openai-codex/gpt-5.5:xhigh or anthropic/claude-fable-5:max when the user requests a specific effort level.",
-    list,
+    "Workflow agents NEVER name concrete models — the harness router picks the engine for every spawn. Do NOT use opts.model; a raw provider/id is not honored.",
+    "REQUIRED on EVERY agent: opts.operation — 'retrieval' (find/list/fetch), 'comprehension' (trace/summarize/map), or 'inference' (audit/review/judge/decide). Add opts.size ('S'|'M'|'L'|'XL') to cap engine cost for the task's scale.",
+    "Legacy fallback when an operation genuinely doesn't fit: opts.tier 'small' (lightweight exploration/search/inventory), 'medium' (balanced analysis), or 'big' (synthesis/judgment/decision across the full context) — the router bridges tiers to levels.",
+    "An agent with neither opts.operation nor opts.tier gets the router's default for its tool profile; do not rely on that — declare the operation explicitly.",
   ].join(" ");
 }
 
