@@ -20,6 +20,7 @@ import {
   CustomEditor,
   type ExtensionAPI,
   type ExtensionCommandContext,
+  type ExtensionContext,
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
@@ -30,7 +31,14 @@ import {
   saveWorkflowSettings,
   type WorkflowSettings,
   type WorkflowSettingsStore,
+  type WorkflowTriggerMode,
 } from "./workflow-settings.js";
+import {
+  classifyWorkflowSemantically,
+  resolveWorkflowTriggerMode,
+  type SemanticWorkflowClassifier,
+  shouldClassifyWorkflow,
+} from "./workflow-trigger.js";
 
 // A keyword trigger is a configured literal term. The default `workflow`
 // trigger keeps legacy substring behavior and plural support (`workflows`) while
@@ -68,6 +76,8 @@ export function endsWithTrigger(textBeforeCursor: string, triggerWord = DEFAULT_
 /** Shared, mutable view of whether "workflows mode" is currently armed. */
 export interface WorkflowModeState {
   active: boolean;
+  triggerMode?: WorkflowTriggerMode;
+  /** Legacy compatibility mirror: true only in keyword mode. */
   keywordTriggerEnabled: boolean;
   keywordTriggerWord?: string;
   suppressedKeywordText?: string;
@@ -75,6 +85,8 @@ export interface WorkflowModeState {
 
 export interface InstallWorkflowEditorOptions {
   settingsStore?: WorkflowSettingsStore;
+  /** Test seam; production uses the configured stateless classifier. */
+  semanticClassifier?: SemanticWorkflowClassifier;
 }
 
 interface AnsiToken {
@@ -193,7 +205,7 @@ export class WorkflowEditor extends CustomEditor {
   /** Highlighted/armed: a trigger is present and the user hasn't toggled it off. */
   isActive(): boolean {
     return (
-      this.modeState.keywordTriggerEnabled &&
+      (this.modeState.triggerMode ?? (this.modeState.keywordTriggerEnabled ? "keyword" : "off")) === "keyword" &&
       !this.disabled &&
       hasTrigger(this.getText(), this.modeState.keywordTriggerWord)
     );
@@ -305,44 +317,66 @@ export function buildForcedWorkflowPrompt(text: string, extraDirective?: string)
 /** The exact name of the workflow tool that workflows mode forces. */
 export const WORKFLOW_TOOL_NAME = "workflow";
 
+function setTriggerMode(state: WorkflowModeState, mode: WorkflowTriggerMode): void {
+  state.triggerMode = mode;
+  state.keywordTriggerEnabled = mode === "keyword";
+  state.active = false;
+  state.suppressedKeywordText = undefined;
+}
+
 export function registerWorkflowTriggerCommand(
   pi: ExtensionAPI,
   state: WorkflowModeState,
   settingsStore: WorkflowSettingsStore = DEFAULT_SETTINGS_STORE,
 ): void {
   pi.registerCommand?.("workflows-trigger", {
-    description: "Keyword workflow trigger: on | off | set <word> | reset | status",
+    description: "Workflow auto-selection: semantic | keyword | off | status",
     async handler(args: string, _ctx: ExtensionCommandContext) {
       const raw = args.trim();
       const [command = "status", ...rest] = raw.split(/\s+/);
       const arg = command.toLowerCase();
       const say = (content: string) => pi.sendMessage({ customType: "workflows-trigger", content, display: true });
-      if (arg === "on") {
-        state.keywordTriggerEnabled = true;
-        state.suppressedKeywordText = undefined;
-        const saved = persistWorkflowTriggerSettings(settingsStore, { keywordTriggerEnabled: true });
+      if (arg === "on" || arg === "semantic" || arg === "auto") {
+        setTriggerMode(state, "semantic");
+        const saved = persistWorkflowTriggerSettings(settingsStore, {
+          workflowTriggerMode: "semantic",
+          keywordTriggerEnabled: true,
+        });
         await say(
           saved
-            ? `Workflows keyword trigger on — mentioning ${triggerDisplayName(state.keywordTriggerWord)} in an interactive message will auto-arm workflows mode. Saved for new sessions.`
-            : "Workflows keyword trigger on for this session, but the preference could not be saved.",
+            ? "Semantic workflow trigger on — a small model now decides whether the current request benefits from workflow fan-out. Saved for new sessions."
+            : "Semantic workflow trigger on for this session, but the preference could not be saved.",
+        );
+        return;
+      }
+      if (arg === "keyword") {
+        setTriggerMode(state, "keyword");
+        const saved = persistWorkflowTriggerSettings(settingsStore, {
+          workflowTriggerMode: "keyword",
+          keywordTriggerEnabled: true,
+        });
+        await say(
+          saved
+            ? `Legacy keyword trigger on — mentioning ${triggerDisplayName(state.keywordTriggerWord)} forces a workflow. Saved for new sessions.`
+            : "Legacy keyword trigger on for this session, but the preference could not be saved.",
         );
         return;
       }
       if (arg === "off") {
-        state.keywordTriggerEnabled = false;
-        state.active = false;
-        state.suppressedKeywordText = undefined;
-        const saved = persistWorkflowTriggerSettings(settingsStore, { keywordTriggerEnabled: false });
+        setTriggerMode(state, "off");
+        const saved = persistWorkflowTriggerSettings(settingsStore, {
+          workflowTriggerMode: "off",
+          keywordTriggerEnabled: false,
+        });
         await say(
           saved
-            ? `Workflows keyword trigger off — messages can mention ${triggerDisplayName(state.keywordTriggerWord)} without forcing the workflow tool. Saved for new sessions. Use /workflows-trigger on to restore.`
-            : "Workflows keyword trigger off for this session, but the preference could not be saved. Use /workflows-trigger on to restore.",
+            ? "Automatic workflow triggering off. Explicit /effort modes and manual workflow calls still work. Saved for new sessions."
+            : "Automatic workflow triggering off for this session, but the preference could not be saved.",
         );
         return;
       }
       if (arg === "set") {
-        const requested = rest.join(" ");
-        const keywordTriggerWord = normalizeKeywordTriggerWord(requested);
+        const keywordTriggerWord = normalizeKeywordTriggerWord(rest.join(" "));
         if (!keywordTriggerWord) {
           await say(
             'Invalid trigger word. Use a non-empty term with no spaces and no leading "/", e.g. /workflows-trigger set pi-workflow',
@@ -350,31 +384,34 @@ export function registerWorkflowTriggerCommand(
           return;
         }
         state.keywordTriggerWord = keywordTriggerWord;
-        state.suppressedKeywordText = undefined;
-        const saved = persistWorkflowTriggerSettings(settingsStore, { keywordTriggerWord });
+        setTriggerMode(state, "keyword");
+        const saved = persistWorkflowTriggerSettings(settingsStore, {
+          workflowTriggerMode: "keyword",
+          keywordTriggerEnabled: true,
+          keywordTriggerWord,
+        });
         await say(
           saved
-            ? `Workflows keyword trigger word set to "${keywordTriggerWord}". Saved for new sessions.`
-            : `Workflows keyword trigger word set to "${keywordTriggerWord}" for this session, but the preference could not be saved.`,
+            ? `Legacy keyword trigger set to "${keywordTriggerWord}" and enabled. Saved for new sessions.`
+            : `Legacy keyword trigger set to "${keywordTriggerWord}" for this session, but the preference could not be saved.`,
         );
         return;
       }
       if (arg === "reset") {
         state.keywordTriggerWord = DEFAULT_KEYWORD_TRIGGER_WORD;
-        state.suppressedKeywordText = undefined;
         const saved = persistWorkflowTriggerSettings(settingsStore, {
           keywordTriggerWord: DEFAULT_KEYWORD_TRIGGER_WORD,
         });
         await say(
           saved
-            ? 'Workflows keyword trigger word reset to "workflow" (also matches "workflows"). Saved for new sessions.'
-            : 'Workflows keyword trigger word reset to "workflow" for this session, but the preference could not be saved.',
+            ? 'Legacy keyword reset to "workflow"; the current trigger mode was not changed.'
+            : 'Legacy keyword reset to "workflow" for this session, but the preference could not be saved.',
         );
         return;
       }
-      const keywordTriggerWord = resolvedTriggerWord(state.keywordTriggerWord);
+      const mode = state.triggerMode ?? (state.keywordTriggerEnabled ? "keyword" : "off");
       await say(
-        `Workflows keyword trigger is ${state.keywordTriggerEnabled ? "on" : "off"}; trigger word is "${keywordTriggerWord}". Changes are saved for new sessions. Usage: /workflows-trigger on | off | set <word> | reset | status`,
+        `Workflow trigger mode is ${mode}; legacy keyword is "${resolvedTriggerWord(state.keywordTriggerWord)}". Semantic classification is the default. Usage: /workflows-trigger semantic | keyword | off | set <word> | reset | status`,
       );
     },
   });
@@ -446,9 +483,12 @@ export function installWorkflowEditor(
 ): WorkflowModeState {
   const settingsStore = options.settingsStore ?? DEFAULT_SETTINGS_STORE;
   const initialSettings = loadInitialWorkflowSettings(settingsStore);
+  const semanticClassifier = options.semanticClassifier ?? classifyWorkflowSemantically;
+  const triggerMode = resolveWorkflowTriggerMode(initialSettings);
   const state: WorkflowModeState = {
     active: false,
-    keywordTriggerEnabled: initialSettings.keywordTriggerEnabled ?? true,
+    triggerMode,
+    keywordTriggerEnabled: triggerMode === "keyword",
     keywordTriggerWord: initialSettings.keywordTriggerWord ?? DEFAULT_KEYWORD_TRIGGER_WORD,
   };
 
@@ -458,55 +498,63 @@ export function installWorkflowEditor(
   registerWorkflowTriggerCommand(pi, state, settingsStore);
   registerWorkflowProgressCommands(pi, settingsStore);
 
-  // Active tools saved while a turn is restricted to `workflow`; restored on turn_end.
-  let savedTools: string[] | undefined;
+  // Track only the tool this trigger adds. Restoring a stale full array would
+  // overwrite unrelated tool changes made by other extensions during the turn.
+  let addedWorkflowTool = false;
 
-  // When armed at submit time, rewrite the user's message to force a workflow AND
-  // ensure the `workflow` tool is in the active tool set, so the model can call it.
-  // We keep all existing tools (bash, read, edit, write, web_search, etc.) because
-  // the model often needs them BEFORE writing the workflow script (e.g. exploring
-  // the codebase, reading files, searching for context). This only ADDS the
-  // workflow tool to the active set; no tools are removed (the original set is
-  // saved in `savedTools` and restored elsewhere).
-  //
-  // NOTE: we check event.text directly (hasTrigger) rather than state.active from
-  // the editor, because the editor's state is reset synchronously by submitValue()
-  // BEFORE the input event fires (the actual prompt processing is async).
-  pi.on("input", (event: { source?: string; text?: string }) => {
-    if (event.source !== "interactive" || !event.text) return { action: "continue" } as const;
-    // Arm either when the user typed the "workflow(s)" trigger, or when standing
-    // effort mode is on and the message is a substantive request.
-    const normalizedText = event.text.trim();
-    const suppressed = state.suppressedKeywordText === normalizedText;
-    if (suppressed) state.suppressedKeywordText = undefined;
-    const triggered = state.keywordTriggerEnabled && !suppressed && hasTrigger(event.text, state.keywordTriggerWord);
-    const byEffort = !triggered && !!effort && effort.level !== "off" && isSubstantive(event.text);
-    if (!triggered && !byEffort) return { action: "continue" } as const;
-    try {
-      if (savedTools === undefined) {
-        savedTools = pi.getActiveTools?.() ?? [];
-        const current = [...savedTools];
-        if (!current.includes(WORKFLOW_TOOL_NAME)) {
-          current.push(WORKFLOW_TOOL_NAME);
+  // The input hook is async: semantic mode asks a small stateless model for a
+  // conservative binary decision. Effort and legacy keyword modes remain explicit
+  // deterministic overrides. Any classifier failure returns DIRECT.
+  pi.on(
+    "input",
+    (event: { source?: string; text?: string; streamingBehavior?: "steer" | "followUp" }, ctx: ExtensionContext) => {
+      if (event.source !== "interactive" || !event.text) return { action: "continue" } as const;
+      const inputText = event.text;
+      const normalizedText = inputText.trim();
+      const suppressed = state.suppressedKeywordText === normalizedText;
+      if (suppressed) state.suppressedKeywordText = undefined;
+
+      const mode = state.triggerMode ?? (state.keywordTriggerEnabled ? "keyword" : "off");
+      const byKeyword = mode === "keyword" && !suppressed && hasTrigger(inputText, state.keywordTriggerWord);
+      const byEffort = !byKeyword && !!effort && effort.level !== "off" && isSubstantive(inputText);
+
+      const force = (bySemantic: boolean) => {
+        try {
+          if (!addedWorkflowTool) {
+            const current = pi.getActiveTools?.() ?? [];
+            if (!current.includes(WORKFLOW_TOOL_NAME)) {
+              pi.setActiveTools?.([...current, WORKFLOW_TOOL_NAME]);
+              addedWorkflowTool = true;
+            }
+          }
+        } catch {
+          // Tool activation is best-effort; the directive still explains the required action.
         }
-        pi.setActiveTools?.(current);
-      }
-    } catch {
-      // Tool restriction is best-effort; the directive still forces the workflow.
-    }
-    const extra = byEffort && effort ? effortDirective(effort.level) : undefined;
-    return { action: "transform", text: buildForcedWorkflowPrompt(event.text, extra) } as const;
-  });
+        if (bySemantic) ctx.ui.notify("Workflow selected by semantic trigger", "info");
+        const extra = byEffort && effort ? effortDirective(effort.level) : undefined;
+        return { action: "transform", text: buildForcedWorkflowPrompt(inputText, extra) } as const;
+      };
 
-  // Restore the user's full tool set once the forced turn completes.
-  pi.on("turn_end", () => {
-    if (savedTools === undefined) return;
-    const restore = savedTools;
-    savedTools = undefined;
+      if (byKeyword || byEffort) return force(false);
+      if (mode !== "semantic" || !shouldClassifyWorkflow(inputText, event.streamingBehavior)) {
+        return { action: "continue" } as const;
+      }
+      return semanticClassifier(inputText, ctx, initialSettings).then((decision) =>
+        decision === "workflow" ? force(true) : ({ action: "continue" } as const),
+      );
+    },
+  );
+
+  // Keep the workflow tool available across all model/tool rounds, then remove only
+  // the capability this trigger added after the complete agent loop settles.
+  pi.on("agent_settled", () => {
+    if (!addedWorkflowTool) return;
+    addedWorkflowTool = false;
     try {
-      pi.setActiveTools?.(restore);
+      const current = pi.getActiveTools?.() ?? [];
+      pi.setActiveTools?.(current.filter((name) => name !== WORKFLOW_TOOL_NAME));
     } catch {
-      // ignore — nothing we can do if the host rejects the restore
+      // Best-effort cleanup; never disrupt completion for a UI/tool-state failure.
     }
   });
 
@@ -522,11 +570,14 @@ function loadInitialWorkflowSettings(settingsStore: WorkflowSettingsStore): Work
   try {
     const settings = settingsStore.load();
     return {
+      workflowTriggerMode: settings.workflowTriggerMode,
       keywordTriggerEnabled: settings.keywordTriggerEnabled,
       keywordTriggerWord: normalizeKeywordTriggerWord(settings.keywordTriggerWord) ?? DEFAULT_KEYWORD_TRIGGER_WORD,
+      workflowTriggerModel: settings.workflowTriggerModel,
+      workflowTriggerTimeoutMs: settings.workflowTriggerTimeoutMs,
     };
   } catch {
-    return { keywordTriggerEnabled: true, keywordTriggerWord: DEFAULT_KEYWORD_TRIGGER_WORD };
+    return { workflowTriggerMode: "semantic", keywordTriggerWord: DEFAULT_KEYWORD_TRIGGER_WORD };
   }
 }
 

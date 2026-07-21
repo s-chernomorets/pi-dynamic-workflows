@@ -115,7 +115,12 @@ export {
 } from "./workflow-paths.js";
 export type { SavedWorkflow, WorkflowStorage } from "./workflow-saved.js";
 export { assertSafeSavedWorkflowName, createWorkflowStorage, isSafeSavedWorkflowName } from "./workflow-saved.js";
-export type { WorkflowSettings, WorkflowSettingsOptions, WorkflowSettingsStore } from "./workflow-settings.js";
+export type {
+  WorkflowSettings,
+  WorkflowSettingsOptions,
+  WorkflowSettingsStore,
+  WorkflowTriggerMode,
+} from "./workflow-settings.js";
 export {
   getWorkflowProjectSettingsPath,
   getWorkflowSettingsPath,
@@ -125,6 +130,19 @@ export {
 } from "./workflow-settings.js";
 export type { WorkflowToolInput, WorkflowToolOptions } from "./workflow-tool.js";
 export { backgroundStartedText, createWorkflowTool } from "./workflow-tool.js";
+export {
+  buildWorkflowTriggerInput,
+  classifyWorkflowSemantically,
+  DEFAULT_WORKFLOW_TRIGGER_MAX_TOKENS,
+  DEFAULT_WORKFLOW_TRIGGER_MODEL,
+  DEFAULT_WORKFLOW_TRIGGER_TIMEOUT_MS,
+  parseWorkflowTriggerDecision,
+  resolveWorkflowTriggerMode,
+  type SemanticWorkflowClassifier,
+  shouldClassifyWorkflow,
+  WORKFLOW_TRIGGER_SYSTEM_PROMPT,
+  type WorkflowTriggerDecision,
+} from "./workflow-trigger.js";
 export {
   keyToAction,
   type NavAction,

@@ -10,10 +10,19 @@ import { dirname, join } from "node:path";
 import { MAX_AGENT_RETRIES, MAX_CONCURRENCY, normalizeKeywordTriggerWord } from "./config.js";
 import { workflowHomeDir, workflowProjectPaths } from "./workflow-paths.js";
 
+export type WorkflowTriggerMode = "off" | "semantic" | "keyword";
+
 export interface WorkflowSettings {
+  /** Workflow auto-selection mode. Semantic is the safe default; keyword is legacy. */
+  workflowTriggerMode?: WorkflowTriggerMode;
+  /** @deprecated Legacy toggle: false migrates to off; true preserves keyword mode. */
   keywordTriggerEnabled?: boolean;
-  /** Literal keyword that arms workflows mode from interactive input. */
+  /** Literal keyword used only in legacy keyword mode. */
   keywordTriggerWord?: string;
+  /** Small stateless model used for semantic workflow selection. */
+  workflowTriggerModel?: string;
+  /** Hard latency bound for semantic classification. */
+  workflowTriggerTimeoutMs?: number;
   defaultAgentTimeoutMs?: number | null;
   /** Default max concurrent agents per run. Clamped to the runtime maximum. */
   defaultConcurrency?: number;
@@ -118,11 +127,29 @@ function normalizeSettings(value: unknown): WorkflowSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const raw = value as Record<string, unknown>;
   const settings: WorkflowSettings = {};
+  if (
+    raw.workflowTriggerMode === "off" ||
+    raw.workflowTriggerMode === "semantic" ||
+    raw.workflowTriggerMode === "keyword"
+  ) {
+    settings.workflowTriggerMode = raw.workflowTriggerMode;
+  }
   if (typeof raw.keywordTriggerEnabled === "boolean") {
     settings.keywordTriggerEnabled = raw.keywordTriggerEnabled;
   }
   const keywordTriggerWord = normalizeKeywordTriggerWord(raw.keywordTriggerWord);
   if (keywordTriggerWord !== undefined) settings.keywordTriggerWord = keywordTriggerWord;
+  if (typeof raw.workflowTriggerModel === "string" && raw.workflowTriggerModel.includes("/")) {
+    settings.workflowTriggerModel = raw.workflowTriggerModel;
+  }
+  if (
+    typeof raw.workflowTriggerTimeoutMs === "number" &&
+    Number.isFinite(raw.workflowTriggerTimeoutMs) &&
+    raw.workflowTriggerTimeoutMs >= 250 &&
+    raw.workflowTriggerTimeoutMs <= 30_000
+  ) {
+    settings.workflowTriggerTimeoutMs = Math.round(raw.workflowTriggerTimeoutMs);
+  }
   if (raw.defaultAgentTimeoutMs === null) {
     settings.defaultAgentTimeoutMs = null;
   } else if (

@@ -51,7 +51,7 @@ interface MockPi {
   handlers: Record<string, Array<(...args: any[]) => any>>;
 }
 
-function createMockPi(initialTools: string[] = [...DEFAULT_PI_TOOLS]): MockPi {
+function createMockPi(initialTools: string[] = DEFAULT_PI_TOOLS.filter((tool) => tool !== WORKFLOW_TOOL_NAME)): MockPi {
   const handlers: Record<string, Array<(...args: any[]) => any>> = {};
   return {
     on: mock.fn((event: string, handler: (...args: any[]) => any) => {
@@ -67,7 +67,11 @@ function createMockPi(initialTools: string[] = [...DEFAULT_PI_TOOLS]): MockPi {
 function testSettingsOptions(keywordTriggerEnabled = true, keywordTriggerWord?: string) {
   return {
     settingsStore: {
-      load: () => ({ keywordTriggerEnabled, ...(keywordTriggerWord ? { keywordTriggerWord } : {}) }),
+      load: () => ({
+        workflowTriggerMode: keywordTriggerEnabled ? ("keyword" as const) : ("off" as const),
+        keywordTriggerEnabled,
+        ...(keywordTriggerWord ? { keywordTriggerWord } : {}),
+      }),
       save: () => {},
     },
   };
@@ -81,7 +85,7 @@ describe("installWorkflowEditor - tool availability", () => {
   it("should include default Pi tools when input handler fires with 'workflow'", async () => {
     const { installWorkflowEditor } = await import("../src/workflow-editor.js");
 
-    const mockPi = createMockPi([...DEFAULT_PI_TOOLS]);
+    const mockPi = createMockPi(DEFAULT_PI_TOOLS.filter((tool) => tool !== WORKFLOW_TOOL_NAME));
 
     const ui = {
       setEditorComponent: mock.fn(),
@@ -137,11 +141,11 @@ describe("installWorkflowEditor - tool availability", () => {
     );
   });
 
-  it("should restore original tools on turn_end", async () => {
+  it("should remove only the added workflow tool on agent_settled", async () => {
     const { installWorkflowEditor } = await import("../src/workflow-editor.js");
 
     // Add a bonus tool to simulate a plugin adding a tool
-    const originalTools = ["bash", "read", "edit", "write", "custom-plugin-tool", "workflow"];
+    const originalTools = ["bash", "read", "edit", "write", "custom-plugin-tool"];
     const mockPi = createMockPi(originalTools);
 
     const ui = {
@@ -168,16 +172,16 @@ describe("installWorkflowEditor - tool availability", () => {
       assert.ok(toolsWhenActive.includes(t), `"${t}" should be in active tools`);
     }
 
-    // Simulate turn_end
-    const turnEndHandlers = mockPi.handlers.turn_end;
-    assert.ok(turnEndHandlers, "turn_end handler should be registered");
-    assert.equal(turnEndHandlers.length, 1);
+    // Simulate the complete agent loop settling.
+    const agentSettledHandlers = mockPi.handlers.agent_settled;
+    assert.ok(agentSettledHandlers, "agent_settled handler should be registered");
+    assert.equal(agentSettledHandlers.length, 1);
 
-    turnEndHandlers[0]();
+    agentSettledHandlers[0]();
 
-    // Verify original tools were restored exactly
+    // Verify only the workflow capability added by the trigger was removed.
     const restoredTools = mockPi.setActiveTools.mock.calls[1].arguments[0];
-    assert.deepEqual(restoredTools, originalTools, "original tools should be restored exactly");
+    assert.deepEqual(restoredTools, originalTools, "added workflow tool should be removed exactly");
   });
 
   it("should fire for a configured trigger word but not the default word", async () => {
@@ -367,7 +371,7 @@ describe("installWorkflowEditor - tool availability", () => {
       text: "test workflow 1",
     });
 
-    // Second trigger (before turn_end)
+    // Second trigger (before agent_settled)
     inputHandlers[0]({
       source: "interactive",
       text: "test workflow 2",
@@ -376,14 +380,14 @@ describe("installWorkflowEditor - tool availability", () => {
     // setActiveTools should only have been called once (savedTools is already set)
     assert.equal(mockPi.setActiveTools.mock.callCount(), 1);
 
-    // turn_end restores
-    const turnEndHandlers = mockPi.handlers.turn_end;
-    turnEndHandlers[0]();
+    // agent_settled removes the added tool.
+    const agentSettledHandlers = mockPi.handlers.agent_settled;
+    agentSettledHandlers[0]();
 
-    // Subsequent turn_end should NOT restore again (savedTools is now undefined)
+    // Subsequent agent_settled should be a no-op.
     mockPi.setActiveTools.mock.resetCalls();
-    turnEndHandlers[0]();
-    assert.equal(mockPi.setActiveTools.mock.callCount(), 0, "second turn_end should not call setActiveTools");
+    agentSettledHandlers[0]();
+    assert.equal(mockPi.setActiveTools.mock.callCount(), 0, "second agent_settled should not call setActiveTools");
   });
 
   it("should work with different keyword variations: 'workflow', 'workflows', 'WORKFLOW'", async () => {

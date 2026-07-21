@@ -63,23 +63,40 @@ async function load() {
 function testSettingsOptions(keywordTriggerEnabled = true, keywordTriggerWord?: string) {
   return {
     settingsStore: {
-      load: () => ({ keywordTriggerEnabled, ...(keywordTriggerWord ? { keywordTriggerWord } : {}) }),
+      load: () => ({
+        workflowTriggerMode: keywordTriggerEnabled ? ("keyword" as const) : ("off" as const),
+        keywordTriggerEnabled,
+        ...(keywordTriggerWord ? { keywordTriggerWord } : {}),
+      }),
       save: () => {},
     },
   };
 }
 
 function memorySettingsOptions(keywordTriggerEnabled = true, keywordTriggerWord?: string) {
-  let settings: { keywordTriggerEnabled?: boolean; keywordTriggerWord?: string } = {
+  let settings: {
+    workflowTriggerMode?: "off" | "semantic" | "keyword";
+    keywordTriggerEnabled?: boolean;
+    keywordTriggerWord?: string;
+  } = {
+    workflowTriggerMode: keywordTriggerEnabled ? "keyword" : "off",
     keywordTriggerEnabled,
     ...(keywordTriggerWord ? { keywordTriggerWord } : {}),
   };
-  const saved: Array<{ keywordTriggerEnabled?: boolean; keywordTriggerWord?: string }> = [];
+  const saved: Array<{
+    workflowTriggerMode?: "off" | "semantic" | "keyword";
+    keywordTriggerEnabled?: boolean;
+    keywordTriggerWord?: string;
+  }> = [];
   return {
     options: {
       settingsStore: {
         load: () => ({ ...settings }),
-        save: (next: { keywordTriggerEnabled?: boolean; keywordTriggerWord?: string }) => {
+        save: (next: {
+          workflowTriggerMode?: "off" | "semantic" | "keyword";
+          keywordTriggerEnabled?: boolean;
+          keywordTriggerWord?: string;
+        }) => {
           settings = { ...settings, ...next };
           saved.push(next);
         },
@@ -531,7 +548,7 @@ describe("WorkflowEditor", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("installWorkflowEditor", () => {
-  it("registers input and turn_end event hooks", async () => {
+  it("registers input and agent_settled event hooks", async () => {
     const mod = await load();
     const registered: Array<{ event: string }> = [];
     const pi = {
@@ -550,7 +567,7 @@ describe("installWorkflowEditor", () => {
 
     const events = registered.map((r) => r.event);
     assert.ok(events.includes("input"), 'should register "input" hook');
-    assert.ok(events.includes("turn_end"), 'should register "turn_end" hook');
+    assert.ok(events.includes("agent_settled"), 'should register "agent_settled" hook');
   });
 
   it("sets the editor component via ui.setEditorComponent", async () => {
@@ -633,7 +650,7 @@ describe("installWorkflowEditor", () => {
     } as unknown as ExtensionUIContext;
 
     const state = mod.installWorkflowEditor(pi, ui, undefined, store.options);
-    assert.equal(state.keywordTriggerEnabled, true, "keyword trigger should default on");
+    assert.equal(state.triggerMode, "keyword", "test store should select legacy keyword mode");
     assert.equal(state.keywordTriggerWord, "workflow", "keyword trigger word should default to workflow");
 
     const command = commands.get("workflows-trigger");
@@ -642,14 +659,14 @@ describe("installWorkflowEditor", () => {
     await command.handler("off", {});
     assert.equal(state.keywordTriggerEnabled, false);
     assert.equal(state.active, false);
-    assert.deepEqual(store.settings, { keywordTriggerEnabled: false });
-    assert.match(sent.at(-1)?.content ?? "", /keyword trigger off/i);
+    assert.deepEqual(store.settings, { keywordTriggerEnabled: false, workflowTriggerMode: "off" });
+    assert.match(sent.at(-1)?.content ?? "", /triggering off/i);
     assert.match(sent.at(-1)?.content ?? "", /saved for new sessions/i);
 
     await command.handler("on", {});
-    assert.equal(state.keywordTriggerEnabled, true);
-    assert.deepEqual(store.settings, { keywordTriggerEnabled: true });
-    assert.match(sent.at(-1)?.content ?? "", /keyword trigger on/i);
+    assert.equal(state.triggerMode, "semantic");
+    assert.deepEqual(store.settings, { keywordTriggerEnabled: true, workflowTriggerMode: "semantic" });
+    assert.match(sent.at(-1)?.content ?? "", /semantic workflow trigger on/i);
     assert.match(sent.at(-1)?.content ?? "", /saved for new sessions/i);
   });
 
@@ -680,7 +697,11 @@ describe("installWorkflowEditor", () => {
 
     await command.handler("set pi-workflow", {});
     assert.equal(state.keywordTriggerWord, "pi-workflow");
-    assert.deepEqual(store.settings, { keywordTriggerEnabled: true, keywordTriggerWord: "pi-workflow" });
+    assert.deepEqual(store.settings, {
+      keywordTriggerEnabled: true,
+      keywordTriggerWord: "pi-workflow",
+      workflowTriggerMode: "keyword",
+    });
     assert.match(sent.at(-1)?.content ?? "", /pi-workflow/);
 
     await command.handler("status", {});
@@ -688,7 +709,11 @@ describe("installWorkflowEditor", () => {
 
     await command.handler("reset", {});
     assert.equal(state.keywordTriggerWord, "workflow");
-    assert.deepEqual(store.settings, { keywordTriggerEnabled: true, keywordTriggerWord: "workflow" });
+    assert.deepEqual(store.settings, {
+      keywordTriggerEnabled: true,
+      keywordTriggerWord: "workflow",
+      workflowTriggerMode: "keyword",
+    });
   });
 
   it("supports legacy WorkflowModeState objects without keywordTriggerWord", async () => {
@@ -714,10 +739,10 @@ describe("installWorkflowEditor", () => {
     assert.ok(command, "should register /workflows-trigger");
 
     await command.handler("status", {});
-    assert.match(sent.at(-1)?.content ?? "", /trigger word is "workflow"/);
+    assert.match(sent.at(-1)?.content ?? "", /mode is keyword/);
 
     await command.handler("on", {});
-    assert.match(sent.at(-1)?.content ?? "", /workflow\/workflows/);
+    assert.match(sent.at(-1)?.content ?? "", /semantic workflow trigger on/i);
   });
 
   it("loads the persisted keyword trigger preference on install", async () => {
@@ -828,7 +853,8 @@ describe("installWorkflowEditor", () => {
 
     await command.handler("on", {});
 
-    assert.equal(state.keywordTriggerEnabled, true);
+    assert.equal(state.triggerMode, "semantic");
+    assert.equal(state.keywordTriggerEnabled, false);
     assert.match(sent.at(-1)?.content ?? "", /could not be saved/i);
   });
 
@@ -1036,7 +1062,7 @@ describe("installWorkflowEditor", () => {
     assert.ok(tools.includes(mod.WORKFLOW_TOOL_NAME), "effort mode should still add the workflow tool");
   });
 
-  it("restores original tools on turn_end after a triggered turn", async () => {
+  it("removes only the workflow tool it added on agent_settled", async () => {
     const mod = await load();
     const captured: Array<{ event: string; handler: (...args: unknown[]) => unknown }> = [];
 
@@ -1058,9 +1084,9 @@ describe("installWorkflowEditor", () => {
     mod.installWorkflowEditor(pi, ui, undefined, testSettingsOptions());
 
     const inputHandler = captured.find((c) => c.event === "input")?.handler;
-    const turnEndHandler = captured.find((c) => c.event === "turn_end")?.handler;
+    const agentSettledHandler = captured.find((c) => c.event === "agent_settled")?.handler;
     assert.notEqual(inputHandler, undefined, "input handler should be registered");
-    assert.notEqual(turnEndHandler, undefined, "turn_end handler should be registered");
+    assert.notEqual(agentSettledHandler, undefined, "agent_settled handler should be registered");
 
     const initialTools = ["bash", "read", "edit", "write"];
 
@@ -1069,9 +1095,9 @@ describe("installWorkflowEditor", () => {
     assert.ok(currentTools.includes("workflow"), "workflow tool should be added");
     assert.ok(currentTools.length > initialTools.length, "tool set should be expanded");
 
-    // turn_end: restore to saved tools
-    turnEndHandler?.();
-    assert.deepEqual(currentTools, initialTools, "tools should be restored after turn_end");
+    // agent_settled: remove only the tool added by this trigger.
+    agentSettledHandler?.();
+    assert.deepEqual(currentTools, initialTools, "added workflow tool should be removed after agent_settled");
   });
 
   it("does not add WORKFLOW_TOOL_NAME if already present", async () => {

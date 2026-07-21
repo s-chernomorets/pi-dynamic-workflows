@@ -32,11 +32,11 @@ Ask in plain language:
 Run a workflow to audit every route under src/routes/ for missing auth checks.
 ```
 
-Pi writes the script and runs it in the background — your turn ends immediately and a live panel tracks progress while you keep working. Or just type **workflow** or **workflows** in any message to force one. To force one explicitly — even with the keyword trigger off — run `/workflows run <prompt>`. If that causes false triggers, set a custom trigger such as `pi-workflow` with `/workflows-trigger set pi-workflow` or by adding `{ "keywordTriggerWord": "pi-workflow" }` to `~/.pi/workflows/settings.json`. With that setting, only `pi-workflow` auto-arms workflows mode. If you only want to discuss workflows without triggering one, run `/workflows-trigger off`; preferences are saved for new sessions. Check the current state with `/workflows-trigger status`, and turn it back on with `/workflows-trigger on`.
+Pi writes the script and runs it in the background — your turn ends immediately and a live panel tracks progress while you keep working. By default, a small stateless model classifies each substantive interactive request as `WORKFLOW` or `DIRECT`; it sees only the current request plus a capped recent conversation window and fails safely to direct execution. Discussion, quoted transcripts, negation, slash commands, and streaming follow-ups do not force workflows. Use `/workflows-trigger semantic|off|status` to control this behavior. Legacy literal matching remains available through `/workflows-trigger keyword` or `/workflows-trigger set <word>`. To force a run explicitly regardless of trigger mode, use `/workflows run <prompt>`.
 
 ![Workflows mode in the input box](https://raw.githubusercontent.com/QuintinShaw/pi-dynamic-workflows/main/docs/media/workflows-mode.jpg)
 
-If another Pi extension has already installed a custom editor component, pi-dynamic-workflows leaves it in place and keeps the submit-time workflow trigger active. In that compatibility mode, the animated keyword highlight and Backspace one-shot disarm affordance are skipped because the existing editor remains responsible for rendering and input handling; use `/workflows-trigger off` or `/workflows-trigger set <word>` when you need to discuss workflow/workflows without auto-triggering, including in future sessions. Editor composition is load-order dependent: whichever extension installs a visual editor last owns the editor surface, while pi-dynamic-workflows still keeps its submit-time hook registered.
+If another Pi extension has already installed a custom editor component, pi-dynamic-workflows leaves it in place and keeps the submit-time semantic trigger active. The animated keyword highlight and Backspace one-shot disarm affordance exist only in explicit legacy keyword mode. Editor composition is load-order dependent: whichever extension installs a visual editor last owns the editor surface, while pi-dynamic-workflows still keeps its submit-time hook registered.
 
 ## What a workflow looks like
 
@@ -101,10 +101,10 @@ The same model — on Pi, plus the production pieces a real run needs:
 /workflows status <id>      watch a run live; print its result when it finishes
 /workflows save <name>      save the latest run's script as a reusable /<name> command
 /workflows pause|resume|stop|rm <id>
-/workflows-trigger off|on|status
-                            persistently disable, restore, or inspect keyword triggering
-/workflows-trigger set <word>|reset
-                            customize or reset the keyword trigger word (default "workflow",
+/workflows-trigger semantic|off|status
+                            persistently enable, disable, or inspect semantic triggering
+/workflows-trigger keyword|set <word>|reset
+                            enable/configure legacy literal matching (default "workflow",
                             also matches "workflows"; custom words match exactly, case-insensitive)
 /workflows run <prompt>     force a dynamic workflow from <prompt> on demand — the explicit
                             twin of the keyword trigger. Works even when the keyword trigger
@@ -168,15 +168,17 @@ Workflow state is stored under `~/.pi/workflows` so projects do not accumulate e
 
 Use `/workflows-models` to edit these in the TUI: choose the base model first, then choose `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or the session default.
 
-To avoid accidental keyword triggers, configure a custom trigger word in `~/.pi/workflows/settings.json`:
+Semantic triggering is configurable in `~/.pi/workflows/settings.json`:
 
 ```json
 {
-  "keywordTriggerWord": "pi-workflow"
+  "workflowTriggerMode": "semantic",
+  "workflowTriggerModel": "litellm/tensorx-gpt-oss-120b",
+  "workflowTriggerTimeoutMs": 15000
 }
 ```
 
-The default `"workflow"` preserves the legacy behavior and also matches `"workflows"`. Custom trigger words are literal, case-insensitive terms with no spaces and no leading slash; for example, `"pi-workflow"` does not match `"workflow"`, `"workflows"`, or `"pi-workflows"`.
+The classifier uses high reasoning, allows up to 2,048 output tokens so reasoning cannot consume the entire response budget, and any unavailable model, missing auth, timeout, malformed response, or uncertain response falls back to direct execution. Legacy literal matching is still available with `{ "workflowTriggerMode": "keyword", "keywordTriggerWord": "pi-workflow" }`; custom trigger words are case-insensitive terms with no spaces or leading slash.
 
 ## Reference
 
