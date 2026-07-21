@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildWorkflowTriggerInput,
+  isReferentialWorkflowRequest,
   parseWorkflowTriggerDecision,
+  recentContextMentionsWorkflow,
   resolveWorkflowTriggerMode,
   shouldClassifyWorkflow,
 } from "../src/workflow-trigger.js";
@@ -39,13 +41,61 @@ describe("semantic workflow trigger", () => {
     assert.equal(shouldClassifyWorkflow("run a workflow", "followUp"), false);
   });
 
-  it("skips trivial acknowledgements but keeps referential requests", () => {
-    for (const text of ["ok", "Okay!", "thanks", "got it", "sounds good.", "perfect"]) {
+  it("skips ordinary prompts and trivial acknowledgements", () => {
+    for (const text of [
+      "ok",
+      "Okay!",
+      "thanks",
+      "got it",
+      "sounds good.",
+      "perfect",
+      "fix the reducer timeout",
+      "explain why this request failed",
+      "review the implementation once again",
+      "figure out what stalls prompt submission",
+    ]) {
       assert.equal(shouldClassifyWorkflow(text), false, text);
     }
-    for (const text of ["yes, run it", "ok, run the workflow", "continue", "do it", "great, now audit all files"]) {
+  });
+
+  it("keeps explicit orchestration and parallel-shaped requests", () => {
+    for (const text of [
+      "ok, run the workflow",
+      "great, now audit all files",
+      "compare these five libraries",
+      "run the checks in parallel",
+      "fan out across 20 packages",
+      "have separate reviewers inspect the services",
+      "review every extension",
+      "research React, Vue, and Nuxt",
+    ]) {
       assert.equal(shouldClassifyWorkflow(text), true, text);
     }
+  });
+
+  it("classifies referential confirmations only when recent context proposed orchestration", () => {
+    for (const text of ["yes, run it", "continue", "do it", "go ahead"]) {
+      assert.equal(shouldClassifyWorkflow(text), false, text);
+      assert.equal(isReferentialWorkflowRequest(text), true, text);
+    }
+    assert.equal(
+      recentContextMentionsWorkflow({
+        sessionManager: {
+          getBranch: () => [
+            { type: "message", message: { role: "assistant", content: "I can fan out to separate agents." } },
+          ],
+        },
+      } as never),
+      true,
+    );
+    assert.equal(
+      recentContextMentionsWorkflow({
+        sessionManager: {
+          getBranch: () => [{ type: "message", message: { role: "assistant", content: "I can fix it directly." } }],
+        },
+      } as never),
+      false,
+    );
   });
 
   it("includes only recent user/assistant text and excludes tool/custom entries", () => {

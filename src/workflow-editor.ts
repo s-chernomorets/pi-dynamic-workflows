@@ -35,6 +35,8 @@ import {
 } from "./workflow-settings.js";
 import {
   classifyWorkflowSemantically,
+  isReferentialWorkflowRequest,
+  recentContextMentionsWorkflow,
   resolveWorkflowTriggerMode,
   type SemanticWorkflowClassifier,
   shouldClassifyWorkflow,
@@ -536,9 +538,12 @@ export function installWorkflowEditor(
       };
 
       if (byKeyword || byEffort) return force(false);
-      if (mode !== "semantic" || !shouldClassifyWorkflow(inputText, event.streamingBehavior)) {
-        return { action: "continue" } as const;
-      }
+      const semanticCandidate =
+        shouldClassifyWorkflow(inputText, event.streamingBehavior) ||
+        (isReferentialWorkflowRequest(inputText) &&
+          !event.streamingBehavior &&
+          recentContextMentionsWorkflow(ctx));
+      if (mode !== "semantic" || !semanticCandidate) return { action: "continue" } as const;
       return semanticClassifier(inputText, ctx, initialSettings).then((decision) =>
         decision === "workflow" ? force(true) : ({ action: "continue" } as const),
       );

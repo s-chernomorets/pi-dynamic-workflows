@@ -29,11 +29,43 @@ export function resolveWorkflowTriggerMode(settings: WorkflowSettings): Workflow
   return "semantic";
 }
 
-/** Cheap deterministic skips; never selects a workflow by itself. */
+/**
+ * Cheap candidate gate; never selects a workflow by itself. The input hook is
+ * blocking, so sending every ordinary prompt to a remote classifier adds its
+ * full network/model latency before Pi can even display the submitted prompt.
+ */
 export function shouldClassifyWorkflow(text: string, streamingBehavior?: "steer" | "followUp"): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.startsWith("/") || streamingBehavior) return false;
-  return !/^(?:ok(?:ay)?|thanks?|got it|understood|sounds good|great|perfect)[.!\s]*$/i.test(trimmed);
+  if (/^(?:ok(?:ay)?|thanks?|got it|understood|sounds good|great|perfect)[.!\s]*$/i.test(trimmed)) return false;
+
+  // Broad candidate filter only: the model still makes the decision. Include
+  // structural delegation language and plural/every-target forms, not just the
+  // literal word "workflow". Referential confirmations are handled separately
+  // with conversation context so an ordinary "continue" never blocks on this.
+  return /\b(?:workflows?|multi[- ]agent|sub[- ]?agents?|multiple agents?|agent team|fan[- ]?out|in parallel|parallel(?:ize|ise|ized|ised)?|independent (?:tasks?|units?|analyses)|separate (?:agents?|reviewers?|analyses)|(?:split|divide) .{0,80} into|compare|comparison|benchmark|sweep|across \d+|each of|audit (?:all|every)|(?:all|every) (?:files?|extensions?|packages?|models?|options?|components?|services?)|research .{0,120}(?:,|\band\b|\bversus\b|\bvs\.?\b))\b/i.test(
+    trimmed,
+  );
+}
+
+export function isReferentialWorkflowRequest(text: string): boolean {
+  return /^(?:yes[,\s]+)?(?:run it|do it|go ahead|continue|proceed)\b/i.test(text.trim());
+}
+
+export function recentContextMentionsWorkflow(ctx: Pick<ExtensionContext, "sessionManager">): boolean {
+  try {
+    const branch = ctx.sessionManager.getBranch();
+    for (let i = branch.length - 1, seen = 0; i >= 0 && seen < 3; i--) {
+      const entry = branch[i] as unknown as { type?: string; message?: { role?: string; content?: unknown } };
+      if (entry.type !== "message" || (entry.message?.role !== "user" && entry.message?.role !== "assistant")) continue;
+      seen++;
+      const text = extractMessageText(entry.message.content);
+      if (/\b(?:workflows?|multi[- ]agent|fan[- ]?out|in parallel|parallelize|separate agents?)\b/i.test(text)) return true;
+    }
+  } catch {
+    // No history means a referential request is not safe to classify as a workflow.
+  }
+  return false;
 }
 
 export function parseWorkflowTriggerDecision(text: string): WorkflowTriggerDecision {
@@ -66,6 +98,24 @@ export function buildWorkflowTriggerInput(current: string, ctx: Pick<ExtensionCo
   });
 }
 
+class WorkflowClassifierTimeoutError extends Error {}
+
+function warnWorkflowClassifier(ctx: ExtensionContext, message: string): void {
+  try {
+    const bridge = (globalThis as any).__harnessWorkflowRouter as
+      | { getLogger?: (name: string) => { warn: (text: string) => void } }
+      | undefined;
+    const logger = bridge?.getLogger?.("workflow-trigger");
+    if (logger) {
+      logger.warn(message);
+      return;
+    }
+  } catch {
+    // Fall through to the visible UI warning when the harness bridge is unavailable.
+  }
+  ctx.ui.notify(message, "warning");
+}
+
 export const classifyWorkflowSemantically: SemanticWorkflowClassifier = async (text, ctx, settings) => {
   try {
     const selector = settings.workflowTriggerModel ?? DEFAULT_WORKFLOW_TRIGGER_MODEL;
@@ -84,11 +134,18 @@ export const classifyWorkflowSemantically: SemanticWorkflowClassifier = async (t
     };
     const controller = new AbortController();
     const timeoutMs = settings.workflowTriggerTimeoutMs ?? DEFAULT_WORKFLOW_TRIGGER_TIMEOUT_MS;
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let rejectDeadline!: (error: Error) => void;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      rejectDeadline = reject;
+    });
+    const timer = setTimeout(() => {
+      controller.abort();
+      rejectDeadline(new WorkflowClassifierTimeoutError(`workflow classifier timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
     const onAbort = () => controller.abort();
     ctx.signal?.addEventListener("abort", onAbort, { once: true });
     try {
-      const response = await completeSimple(
+      const completion = completeSimple(
         model,
         { systemPrompt: WORKFLOW_TRIGGER_SYSTEM_PROMPT, messages: [message] },
         {
@@ -100,6 +157,7 @@ export const classifyWorkflowSemantically: SemanticWorkflowClassifier = async (t
           signal: controller.signal,
         },
       );
+      const response = await Promise.race([completion, deadline]);
       if (response.stopReason === "aborted" || response.stopReason === "error") return "direct";
       const output = Array.isArray(response.content)
         ? response.content
@@ -111,7 +169,15 @@ export const classifyWorkflowSemantically: SemanticWorkflowClassifier = async (t
             .join("")
         : "";
       return parseWorkflowTriggerDecision(output);
-    } catch {
+    } catch (error) {
+      if (!ctx.signal?.aborted) {
+        warnWorkflowClassifier(
+          ctx,
+          error instanceof WorkflowClassifierTimeoutError
+            ? `Workflow classification timed out after ${timeoutMs}ms; continuing directly.`
+            : "Workflow classification failed; continuing directly.",
+        );
+      }
       return "direct";
     } finally {
       clearTimeout(timer);
